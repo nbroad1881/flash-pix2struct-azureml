@@ -1,3 +1,8 @@
+"""
+Basic training script. Will load the `naver-clova-ix/cord-v2` dataset 
+and train a `google/pix2struct-base` model on it.
+"""
+
 import os
 import sys
 import json
@@ -16,7 +21,6 @@ from transformers import (
     set_seed,
     HfArgumentParser,
     Pix2StructProcessor,
-    # Pix2StructForConditionalGeneration,
 )
 
 from flash_pix2struct import Pix2StructForConditionalGeneration
@@ -24,6 +28,15 @@ from flash_pix2struct import Pix2StructForConditionalGeneration
 filepath = Path(__file__).resolve().parent
 
 class P2STrainer(Seq2SeqTrainer):
+    """
+    Flash attention can only be used in fp16 or bf16 mode. 
+    This trainer ensures that evaluation and prediction are done in the correct dtype.
+
+    If you want to do prediction in fp32, you need to use the regular `Pix2StructForConditionalGeneration`
+    from `transformers` and then use `Seq2SeqTrainer` as well.
+    """
+
+
     def __init__(self, *args, eval_dtype="bf16", **kwargs):
         super().__init__(*args, **kwargs)
         self.eval_dtype = eval_dtype
@@ -35,6 +48,7 @@ class P2STrainer(Seq2SeqTrainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        
         dtype = torch.bfloat16 if self.eval_dtype == "bf16" else torch.float16
         enabled = self.eval_dtype in {"bf16", "fp16"}
         with torch.autocast(device_type="cuda", dtype=dtype, enabled=enabled):
@@ -44,6 +58,19 @@ class P2STrainer(Seq2SeqTrainer):
 
 
 def preprocess(examples, processor, config):
+    """
+    Tokenize the json strings and encode the images.
+    Pad sequences to max length in the batch, make sure 
+    it is a multiple of `config.pad_to_multiple_of`.
+
+    Args:
+        examples: list of examples
+        processor: `Pix2StructProcessor`
+        config: `Config`
+
+    Returns:
+        dict: dictionary with keys `flattened_patches`, `attention_mask`, `labels`
+    """
     
     texts = []
     for x in examples:
@@ -98,6 +125,9 @@ def preprocess(examples, processor, config):
 
 
 def compute_metrics(eval_predictions, tokenizer):
+    """
+    Compute the levenshtein distance between the predictions and the labels.
+    """
     predictions, label_ids = eval_predictions
 
     if isinstance(predictions, tuple):
@@ -105,6 +135,7 @@ def compute_metrics(eval_predictions, tokenizer):
 
     predictions = predictions.argmax(-1)
 
+    # Ignore padding tokens
     predictions = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
     label_ids = np.where(label_ids != -100, label_ids, tokenizer.pad_token_id)
 
@@ -124,7 +155,6 @@ def compute_metrics(eval_predictions, tokenizer):
 @dataclass
 class Config:
 
-
     model_name_or_path: str = field(
         default="google/pix2struct-base", metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
@@ -138,7 +168,7 @@ class Config:
     )
 
     pad_to_multiple_of: int = field(
-        default=8, metadata={"help": "Pad to multiple of"}
+        default=16, metadata={"help": "Pad to multiple of"}
     )   
 
     prompt: str = field(
@@ -148,6 +178,7 @@ class Config:
 
 
 def main():
+
     parser = HfArgumentParser((Config, Seq2SeqTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -191,6 +222,7 @@ def main():
 
     processor.save_pretrained(training_args.output_dir)
 
+    # Show first example
     sample = preprocess([ds["train"][0]], processor, config_args)
     l = sample["labels"]
     l = l[l != -100]
