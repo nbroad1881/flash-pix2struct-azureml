@@ -27,15 +27,15 @@ from flash_pix2struct import Pix2StructForConditionalGeneration
 
 filepath = Path(__file__).resolve().parent
 
+
 class P2STrainer(Seq2SeqTrainer):
     """
-    Flash attention can only be used in fp16 or bf16 mode. 
+    Flash attention can only be used in fp16 or bf16 mode.
     This trainer ensures that evaluation and prediction are done in the correct dtype.
 
     If you want to do prediction in fp32, you need to use the regular `Pix2StructForConditionalGeneration`
     from `transformers` and then use `Seq2SeqTrainer` as well.
     """
-
 
     def __init__(self, *args, eval_dtype="bf16", **kwargs):
         super().__init__(*args, **kwargs)
@@ -48,7 +48,6 @@ class P2STrainer(Seq2SeqTrainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
-        
         dtype = torch.bfloat16 if self.eval_dtype == "bf16" else torch.float16
         enabled = self.eval_dtype in {"bf16", "fp16"}
         with torch.autocast(device_type="cuda", dtype=dtype, enabled=enabled):
@@ -60,7 +59,7 @@ class P2STrainer(Seq2SeqTrainer):
 def preprocess(examples, processor, config):
     """
     Tokenize the json strings and encode the images.
-    Pad sequences to max length in the batch, make sure 
+    Pad sequences to max length in the batch, make sure
     it is a multiple of `config.pad_to_multiple_of`.
 
     Args:
@@ -71,7 +70,7 @@ def preprocess(examples, processor, config):
     Returns:
         dict: dictionary with keys `flattened_patches`, `attention_mask`, `labels`
     """
-    
+
     texts = []
     for x in examples:
         j = json.loads(x["ground_truth"])
@@ -107,7 +106,7 @@ def preprocess(examples, processor, config):
     text_prompt = None
     if config.prompt is not None:
         text_prompt = config.prompt
-        
+
     texts = [text_prompt] * len(images) if text_prompt is not None else None
 
     encoding = processor(
@@ -115,7 +114,7 @@ def preprocess(examples, processor, config):
         text=texts,
         max_patches=config.max_patches,
         return_tensors="pt",
-        font_path=str(filepath /"Arial.TTF"),
+        font_path=str(filepath / "Arial.TTF"),
     )
 
     return {
@@ -139,37 +138,36 @@ def compute_metrics(eval_predictions, tokenizer):
     predictions = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
     label_ids = np.where(label_ids != -100, label_ids, tokenizer.pad_token_id)
 
-
     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
     decoded_labels = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
-    
 
     return {
-        "levenshtein": np.mean([
-            levenshtein(decoded_preds[i], decoded_labels[i]) / max(len(decoded_labels[i]), len(decoded_preds[i]))
-            for i in range(len(decoded_preds))
-        ])
+        "levenshtein": np.mean(
+            [
+                levenshtein(decoded_preds[i], decoded_labels[i])
+                / max(len(decoded_labels[i]), len(decoded_preds[i]))
+                for i in range(len(decoded_preds))
+            ]
+        )
     }
 
 
 @dataclass
 class Config:
-
     model_name_or_path: str = field(
-        default="google/pix2struct-base", metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+        default="google/pix2struct-base",
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"
+        },
     )
 
     max_patches: int = field(
         default=1024, metadata={"help": "Number of patches for image model"}
     )
 
-    max_seq_length: int = field(
-        default=512, metadata={"help": "Max length for text"}
-    )
+    max_seq_length: int = field(default=512, metadata={"help": "Max length for text"})
 
-    pad_to_multiple_of: int = field(
-        default=16, metadata={"help": "Pad to multiple of"}
-    )   
+    pad_to_multiple_of: int = field(default=16, metadata={"help": "Pad to multiple of"})
 
     prompt: str = field(
         default=None,
@@ -178,7 +176,6 @@ class Config:
 
 
 def main():
-
     parser = HfArgumentParser((Config, Seq2SeqTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -189,16 +186,17 @@ def main():
     else:
         config_args, training_args = parser.parse_args_into_dataclasses()
 
-
     set_seed(training_args.seed)
 
     ds = load_dataset("naver-clova-ix/cord-v2")
 
-
-    model = Pix2StructForConditionalGeneration.from_pretrained(config_args.model_name_or_path)
+    model = Pix2StructForConditionalGeneration.from_pretrained(
+        config_args.model_name_or_path
+    )
     is_vqa = config_args.prompt is not None
-    processor = Pix2StructProcessor.from_pretrained(config_args.model_name_or_path, is_vqa=is_vqa)
-
+    processor = Pix2StructProcessor.from_pretrained(
+        config_args.model_name_or_path, is_vqa=is_vqa
+    )
 
     eval_dtype = "fp32"
 
@@ -214,9 +212,7 @@ def main():
         eval_dataset=ds["validation"],
         tokenizer=processor.tokenizer,
         data_collator=partial(preprocess, processor=processor, config=config_args),
-        compute_metrics=partial(
-            compute_metrics, tokenizer=processor.tokenizer
-        ),
+        compute_metrics=partial(compute_metrics, tokenizer=processor.tokenizer),
         eval_dtype=eval_dtype,
     )
 
